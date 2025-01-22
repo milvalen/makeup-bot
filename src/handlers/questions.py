@@ -1,12 +1,12 @@
-from aiogram import Router, F
+from aiogram import Router
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, CallbackQuery
-from aiogram.exceptions import TelegramBadRequest
 
 from src.app import bot
-from src.keyboards.for_questions import get_start_kb
-
-CHANNEL_ID = '@nsbxjxnc'
+from src.keyboards.for_questions import get_start_kb, get_contour_kb, get_texture_kb
+from src.models.lipstcick import LipstickSelection
+from src.utils.utils import is_user_subscribed, send_colors
 
 router = Router()
 
@@ -21,19 +21,55 @@ async def cmd_start(message: Message):
 
 @router.callback_query(lambda c: c.data in ['subscribed'])
 async def process_start_button(callback_query: CallbackQuery):
-    response_text = ''
+    if not await is_user_subscribed(callback_query.from_user.id): return
+    await bot.answer_callback_query(callback_query.id)
 
-    try:
-        if (await bot.get_chat_member(
-                CHANNEL_ID,
-                callback_query.from_user.id
-        )).status not in ['member', 'administrator', 'creator']:
-            response_text = 'Не смогли найти вас среди подписчиков канала.'
-        else:
-            response_text = 'Отлично! Теперь пришли свое селфи для примерки (лицо и губы должно быть хорошо видно, светлое фото в хорошем качестве)'
-    except TelegramBadRequest as e:
-        if 'member list is inaccessible' in str(e):
-            response_text = 'Бот не может проверить подписку. Необходимо пригласить его как администратора в канал.'
+    await bot.send_message(
+        callback_query.from_user.id,
+        'Отлично! Теперь пришли свое селфи для примерки (лицо и губы должно быть хорошо видно, светлое фото в хорошем '
+        'качестве)'
+    )
+
+
+@router.message()
+async def handle_message(message: Message):
+    if not await is_user_subscribed(message.from_user.id): return
+
+    if message.photo:
+        await message.answer('Выбери вид нанесения', reply_markup=get_contour_kb())
+        return
+
+    await message.answer(
+        'Для примерки помады необходимо отправить свое селфи. Лицо и губы должно быть хорошо видно, светлое фото в '
+        'хорошем качестве)'
+    )
+
+
+@router.callback_query(lambda c: c.data in ['monochrome', 'contoured'])
+async def process_shade(callback_query: CallbackQuery, state: FSMContext):
+    if not await is_user_subscribed(callback_query.from_user.id): return
+    await bot.answer_callback_query(callback_query.id)
+
+    await send_colors(
+        callback_query.from_user.id, 'MONOCHROME' if callback_query.data == 'monochrome' else 'SHADE',
+        state
+    )
+
+
+@router.callback_query(lambda c: c.data.endswith(('_MONOCHROME', '_SHADE', '_CONTOUR')))
+async def process_texture(callback_query: CallbackQuery, state: FSMContext):
+    if not await is_user_subscribed(callback_query.from_user.id): return
+
+    if callback_query.data.endswith('_SHADE'):
+        await send_colors(callback_query.from_user.id, 'CONTOUR', state)
+        return
 
     await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(callback_query.from_user.id, response_text)
+    await bot.send_message(callback_query.from_user.id, 'Выбери текстуру помады', reply_markup=get_texture_kb())
+    await state.set_state(LipstickSelection.texture)
+
+@router.callback_query(lambda c: c.data in ['glossy', 'matte'])
+async def process_picture(callback_query: CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    await bot.send_message(callback_query.from_user.id, 'Помада выбрана!')
+    # todo: manage lipstick state
